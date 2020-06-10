@@ -21,6 +21,11 @@ type QSession interface {
 	WriteResponse(rsp io.Writer) []byte
 }
 
+// QSessionEx interface make session more extension method in it life
+type QSessionEx interface {
+	Terminate()
+}
+
 // QHandle defined basic service handler interface in framework
 type QHandle interface {
 	InitHandler(inst QInstance, rte RouteHandle, ptree *RouteTree)
@@ -72,7 +77,6 @@ func getSessionEnv(inst QInstance, req SvrReq) interface{} {
 // QHandle2HandlerFunc convert QHandle to HandlerFunc
 func QHandle2HandlerFunc(hnd QHandle, inst QInstance) func(
 	rsp http.ResponseWriter, req *http.Request) {
-	hnd.InitHandler(inst, nil, nil)
 	var sndlog func(QLogLevel, string)
 	sndlog = inst.Log("error")
 	if sndlog == nil {
@@ -80,17 +84,40 @@ func QHandle2HandlerFunc(hnd QHandle, inst QInstance) func(
 			fmt.Println(msg)
 		}
 	}
+	// extension session terminate
+	exSesTerm := func(ses QSession) {
+		defer (func() {
+			if err := recover(); err != nil {
+				sndlog(LQLogERROR, fmt.Sprintf(
+					"A big error in session terminate - %q\n%s",
+					err, string(debug.Stack())))
+			}
+		})()
+		sesex, ok := ses.(QSessionEx)
+		if !ok {
+			return
+		}
+		sesex.Terminate()
+		//TODO: append more support termnate method here
+		return
+	}
+	// init handle
+	hnd.InitHandler(inst, nil, nil)
 	// create session and process redirect
 	maxRdir := inst.InstConf().MaxRedirect
-	createSession := func(reqobj SvrReq) (ret QSession) {
+	createSession := func(reqobj SvrReq) (ses QSession) {
 		defer (func() {
 			if err := recover(); err != nil {
 				sndlog(LQLogERROR, fmt.Sprintf(
 					"A big error - %q\n%s", err, string(debug.Stack())))
-				ret = CreateErrSession(
+				if ses != nil {
+					exSesTerm(ses)
+				}
+				ses = CreateErrSession(
 					http.StatusInternalServerError, "Big Errorrrrrrr", nil)
 			}
 		})()
+		//
 		var reqinfoFunc func() *string
 		if inst.InstConf().Debuging {
 			reqinfoFunc = func() *string {
@@ -108,13 +135,20 @@ func QHandle2HandlerFunc(hnd QHandle, inst QInstance) func(
 					http.StatusInternalServerError, "an error occured", reqinfoFunc())
 			}
 			rdir, err := ses.EnterServer()
-			if rdir != "" {
-				reqobj.redirect(splitePath(rdir))
-				continue
-			} else if err != nil {
-				sndlog(LQLogERROR, fmt.Sprintf("handler error - %q", err))
-				return CreateErrSession(
-					http.StatusInternalServerError, "an error occured", reqinfoFunc())
+			if rdir != "" || err != nil {
+				defer (func() {
+					xses := ses
+					ses = nil
+					exSesTerm(xses)
+				})()
+				if rdir != "" {
+					reqobj.redirect(splitePath(rdir))
+					continue
+				} else if err != nil {
+					sndlog(LQLogERROR, fmt.Sprintf("handler error - %q", err))
+					return CreateErrSession(
+						http.StatusInternalServerError, "an error occured", reqinfoFunc())
+				}
 			}
 			return ses
 		}
@@ -126,6 +160,7 @@ func QHandle2HandlerFunc(hnd QHandle, inst QInstance) func(
 	return func(rsp http.ResponseWriter, req *http.Request) {
 		reqobj := createReqObj(inst, rsp, req)
 		ses := createSession(reqobj)
+		defer exSesTerm(ses)
 		state := ses.BeginResponse(rsp.Header())
 		rsp.WriteHeader(state)
 		ret := ses.WriteResponse(rsp)
