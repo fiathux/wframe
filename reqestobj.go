@@ -15,8 +15,12 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 )
+
+// parse http `token` string(reference RFC2616)
+var matchHttpToken = regexp.MustCompile("^[a-zA-Z0-9!#\\$%&'\\*\\+-\\.\\^_`\\|~]+$")
 
 // ContentReadHardLimit set body content length limit for native reader
 const ContentReadHardLimit uint = 8388608
@@ -59,6 +63,8 @@ type SvrReq interface {
 	//Header
 	ContentLength() int64 // length of request body
 	Header() http.Header  // request headers
+	// Rewrite request headers
+	RewriteHeader(name string, values []string) error
 	// body reader
 	ReadBodyRaw(buff []byte) (int, error) //get body as bytes buffer
 	ReadBodyJSON(ref interface{}) error   // get body as a JSON object
@@ -192,6 +198,15 @@ func (srq *svrRspObj) ContentLength() int64 {
 // get HTTP head object
 func (srq *svrRspObj) Header() http.Header {
 	return srq.req.Header
+}
+
+// safety rewrite request header
+func (srq *svrRspObj) RewriteHeader(name string, values []string) error {
+	if !matchHttpToken.MatchString(name) {
+		return fmt.Errorf("Invalid HTTP header named %s", name)
+	}
+	srq.req.Header[name] = values
+	return nil
 }
 
 // check body reader
