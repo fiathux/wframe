@@ -20,9 +20,8 @@ type QInstance interface {
 	WorkPath(relpath string) string                   // get work path
 	//get log sender
 	Log(name string) func(level QLogLevel, msg string)
-	logInst(name string) *LogInstance // get log instance
-	ServiceName() string              // get service name
-	Terminate()                       // terminate instance
+	ServiceName() string // get service name
+	Terminate()          // terminate instance
 }
 
 // QEnv is basic environment object interface
